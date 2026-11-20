@@ -6,6 +6,9 @@ The repository contains:
 - **`Android/`** — Kotlin source files and the Android app module configuration.
 - **`PythonModel/`** — Python scripts for training, fine-tuning, evaluating, and exporting the image classifier.
 
+You can find the apk version of the app for your android here: 
+https://failiem.lv/u/6uusrwcapxwz2xee
+
 ## Features
 
 - Real-time camera-based waste classification.
