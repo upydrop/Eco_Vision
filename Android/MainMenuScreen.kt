@@ -54,7 +54,7 @@ fun MainMenuScreen(
         drawCircle(palette.blobB, size.width * 0.4f, Offset(size.width * 0.85f, size.height * 0.8f))
     }) {
         Box(Modifier.align(Alignment.TopStart).statusBarsPadding().padding(start = 22.dp, top = 14.dp)) {
-            DockIcon(Icons.Rounded.Info, palette, onAbout, "О приложении")
+            DockIcon(Icons.Rounded.Info, palette, onAbout, "About")
         }
         Column(
             Modifier.align(Alignment.Center).offset(y = (-70).dp)
@@ -76,13 +76,13 @@ fun MainMenuScreen(
         ) {
             Row(Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                DockIcon(Icons.Rounded.LocationOn, palette, onMap, "Карта сортировки")
+                DockIcon(Icons.Rounded.LocationOn, palette, onMap, "Recycling map")
                 Box(Modifier.size(78.dp).shadow(8.dp, CircleShape)
                     .background(palette.accent, CircleShape).clickable(onClick = onCamera),
                     contentAlignment = Alignment.Center) {
-                    Icon(Icons.Rounded.PhotoCamera, contentDescription = "Камера", tint = Color.White, modifier = Modifier.size(38.dp))
+                    Icon(Icons.Rounded.PhotoCamera, contentDescription = "Camera", tint = Color.White, modifier = Modifier.size(38.dp))
                 }
-                DockIcon(Icons.Rounded.Settings, palette, onSettings, "Настройки")
+                DockIcon(Icons.Rounded.Settings, palette, onSettings, "Settings")
             }
         }
     }

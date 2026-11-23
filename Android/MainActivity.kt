@@ -90,11 +90,11 @@ class MainActivity : ComponentActivity() {
 
 /** Русские названия классов модели (labels.json). */
 private val LABEL_TITLES = mapOf(
-    "glass" to "Стекло",
-    "metal" to "Металл",
-    "paper" to "Бумага",
-    "plastic" to "Пластик",
-    "trash" to "Другой мусор"
+    "glass" to "Glass",
+    "metal" to "Metal",
+    "paper" to "Paper",
+    "plastic" to "Plastic",
+    "trash" to "Other waste"
 )
 
 private fun labelTitle(label: String): String =
@@ -215,22 +215,22 @@ fun WasteCameraScreen(
         .padding(horizontal = 16.dp, vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
             IconButton(onClick = onBack, modifier = Modifier.background(p.panel, RoundedCornerShape(50))) {
-                Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Назад", tint = p.text)
+                Icon(Icons.AutoMirrored.Rounded.ArrowBack, "Back", tint = p.text)
             }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("EcoVision", color = p.text, fontSize = 25.sp, fontWeight = FontWeight.Black)
                 Text("SMART SCANNER", color = p.accent, fontSize = 10.sp, letterSpacing = 2.sp)
             }
             IconButton(onClick = onSettings, modifier = Modifier.background(p.panel, RoundedCornerShape(50))) {
-                Icon(Icons.Rounded.Settings, "Настройки", tint = p.text)
+                Icon(Icons.Rounded.Settings, "Settings", tint = p.text)
             }
         }
         Spacer(Modifier.height(16.dp))
         if (!hasPermission) {
             Spacer(Modifier.weight(1f))
-            Text("Для распознавания нужен доступ к камере", color = p.text)
+            Text("Camera access is required for recognition", color = p.text)
             Spacer(Modifier.height(12.dp))
-            Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) { Text("Разрешить камеру") }
+            Button(onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) }) { Text("Allow camera") }
             Spacer(Modifier.weight(1f))
         } else {
             Box(modifier = Modifier.fillMaxWidth().weight(1f)
@@ -239,7 +239,7 @@ fun WasteCameraScreen(
                 frozenBitmap?.let { frame ->
                     Image(
                         bitmap = frame.asImageBitmap(),
-                        contentDescription = "Зафиксированный кадр",
+                        contentDescription = "Captured frame",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
                     )
@@ -271,22 +271,22 @@ fun WasteCameraScreen(
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(when {
-                    frozenBitmap != null -> "Продолжить сканирование"
-                    freezePending -> "Фиксируем кадр…"
-                    else -> "Зафиксировать кадр"
+                    frozenBitmap != null -> "Resume scanning"
+                    freezePending -> "Capturing frame…"
+                    else -> "Capture frame"
                 })
             }
             Spacer(Modifier.height(12.dp))
             Column(Modifier.fillMaxWidth().background(p.panel, RoundedCornerShape(24.dp)).padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("ОБНАРУЖЕНО", color = p.muted, fontSize = 11.sp, letterSpacing = 2.sp)
+                Text("DETECTED", color = p.muted, fontSize = 11.sp, letterSpacing = 2.sp)
                 // Фиксированная высота строки: панель не прыгает при смене «думает…» ↔ результат.
                 Row(Modifier.fillMaxWidth().height(36.dp), verticalAlignment = Alignment.CenterVertically) {
                     val error = errorMessage
                     // Ошибка показывается в строке результата, чтобы высота панели не менялась.
                     if (error != null) Text(error, color = MaterialTheme.colorScheme.error, fontSize = 14.sp,
                         maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    else Text(if (thinking) "Модель ещё думает…" else labelTitle(displayed!!.label),
+                    else Text(if (thinking) "Model is thinking…" else labelTitle(displayed!!.label),
                         color = animatedColor, fontWeight = FontWeight.Bold,
                         fontSize = if (thinking) 20.sp else 26.sp, maxLines = 1,
                         overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
@@ -296,14 +296,14 @@ fun WasteCameraScreen(
                     .clip(RoundedCornerShape(50)), color = animatedColor, trackColor = p.soft)
                 // Строки разработчика видны всегда, когда включены (с «—» до первого результата).
                 if (settings.showPercent)
-                    Text("Уверенность модели: " + (displayed?.let { String.format(Locale.US, "%.1f%%", confidence * 100) } ?: "—"),
+                    Text("Model confidence: " + (displayed?.let { String.format(Locale.US, "%.1f%%", confidence * 100) } ?: "—"),
                         color = p.muted, fontSize = 13.sp)
                 if (settings.showRaw)
                     Text("Raw score: " + (displayed?.let { String.format(Locale.US, "%.6f", confidence) } ?: "—"),
                         color = p.muted, fontSize = 12.sp)
             }
             Spacer(Modifier.height(10.dp))
-            Text("Анализ на устройстве · Снимок только в памяти", color = p.muted, fontSize = 11.sp)
+            Text("On-device analysis · Frame kept in memory only", color = p.muted, fontSize = 11.sp)
         }
     }
 }
@@ -391,7 +391,7 @@ private fun startCamera(
                     captureState.compareAndSet(1, 0)
                     previewView.post {
                         if (cameraActive.get()) onError(
-                            e.message ?: "Не удалось обработать кадр"
+                            e.message ?: "Could not process the frame"
                         )
                     }
                 } finally {
@@ -412,7 +412,7 @@ private fun startCamera(
             )
         } catch (e: Exception) {
             if (cameraActive.get()) onError(
-                e.message ?: "Не удалось запустить камеру"
+                e.message ?: "Could not start the camera"
             )
         }
     }, ContextCompat.getMainExecutor(context))

@@ -74,9 +74,9 @@ private const val COLOR_SITE = "#E08A1E"    // площадки (в т.ч. «д�
 
 /** Вид пункта: обычные контейнеры, приём депозитной тары или площадка сортированных отходов. */
 private enum class PointKind(val key: String, val title: String) {
-    Containers("point", "Контейнеры для сортировки"),
-    Deposit("deposit", "Приём депозитной тары"),
-    Site("site", "Площадка сортированных отходов")
+    Containers("point", "Sorting containers"),
+    Deposit("deposit", "Deposit return point"),
+    Site("site", "Sorted waste site")
 }
 
 private data class RecyclingPoint(
@@ -97,25 +97,25 @@ private data class RecyclingPoint(
 
 /** Фильтры = классы модели (labels.json: glass, metal, paper, plastic, trash) + тарамат. */
 private val filters = listOf(
-    "all" to "Все",
-    "paper" to "Бумага",
-    "plastic" to "Пластик",
-    "glass" to "Стекло",
-    "metal" to "Металл",
-    "trash" to "Другое",
-    "deposit" to "Тарамат"
+    "all" to "All",
+    "paper" to "Paper",
+    "plastic" to "Plastic",
+    "glass" to "Glass",
+    "metal" to "Metal",
+    "trash" to "Other",
+    "deposit" to "Deposit"
 )
 
 private val MAIN_MATERIALS = linkedMapOf(
-    "paper" to "Бумага", "plastic" to "Пластик", "glass" to "Стекло", "metal" to "Металл"
+    "paper" to "Paper", "plastic" to "Plastic", "glass" to "Glass", "metal" to "Metal"
 )
 
 private val EXTRA_MATERIALS = linkedMapOf(
-    "bulky" to "крупногабаритные", "electronics" to "электроника", "batteries" to "батарейки",
-    "lamps" to "лампы", "hazardous" to "опасные", "paint" to "краски", "tires" to "шины",
-    "oil" to "масла", "construction" to "строительные", "wood" to "древесина",
-    "textiles" to "текстиль", "bio" to "биоотходы", "cooking_oil" to "пищевой жир",
-    "asbestos" to "асбест"
+    "bulky" to "bulky waste", "electronics" to "electronics", "batteries" to "batteries",
+    "lamps" to "lamps", "hazardous" to "hazardous waste", "paint" to "paint", "tires" to "tires",
+    "oil" to "oil", "construction" to "construction waste", "wood" to "wood",
+    "textiles" to "textiles", "bio" to "bio waste", "cooking_oil" to "cooking oil",
+    "asbestos" to "asbestos"
 )
 
 private fun RecyclingPoint.matches(filter: String): Boolean = when (filter) {
@@ -131,7 +131,7 @@ private fun RecyclingPoint.matches(filter: String): Boolean = when (filter) {
  * Читает очищенный recycling_points.json. Формат точки:
  * { id, kind: point|deposit|site, lat, lon, address,
  *   materials?: [paper, plastic, glass, metal, bulky, ...], operator?, store?, note?,
- *   hours?: [["Вт–Вс", "10:00–19:00"], ...] }
+ *   hours?: [["Tue–Sun", "10:00–19:00"], ...] }
  * Переводы, разбор примечаний и сжатие часов уже сделаны в самом файле.
  */
 private fun loadPoints(context: Context): List<RecyclingPoint> {
@@ -247,14 +247,14 @@ private fun nearest(points: List<RecyclingPoint>, location: Location): Recycling
 private fun distanceText(point: RecyclingPoint, location: Location?): String? {
     location ?: return null
     val meters = distanceMeters(location, point)
-    return if (meters < 1000f) "${meters.toInt()} м по прямой"
-    else String.format(Locale.getDefault(), "%.1f км по прямой", meters / 1000f)
+    return if (meters < 1000f) "${meters.toInt()} m in a straight line"
+    else String.format(Locale.US, "%.1f km in a straight line", meters / 1000f)
 }
 
 private fun openRoute(context: Context, point: RecyclingPoint) {
     val uri = Uri.parse("https://www.google.com/maps/dir/?api=1&destination=${point.lat},${point.lon}&travelmode=walking")
     try { context.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
-    catch (_: Exception) { android.widget.Toast.makeText(context, "Не удалось открыть маршрут", android.widget.Toast.LENGTH_LONG).show() }
+    catch (_: Exception) { android.widget.Toast.makeText(context, "Could not open the route", android.widget.Toast.LENGTH_LONG).show() }
 }
 
 private fun hasLocationPermission(context: Context): Boolean =
@@ -316,7 +316,7 @@ fun RecyclingMapScreen(p: EcoPalette, onBack: () -> Unit) {
 
     fun onLocation(loc: Location?) {
         userLocation = loc
-        gpsMessage = if (loc == null) "Не удалось получить геопозицию. Проверь GPS." else null
+        gpsMessage = if (loc == null) "Could not get your location. Check GPS." else null
         if (loc != null) map?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(loc.latitude, loc.longitude), 13.0))
     }
 
@@ -324,7 +324,7 @@ fun RecyclingMapScreen(p: EcoPalette, onBack: () -> Unit) {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { granted ->
         if (granted.values.any { it }) requestLocation(context, ::onLocation)
-        else gpsMessage = "Геолокация не разрешена. Карту можно использовать вручную."
+        else gpsMessage = "Location permission denied. You can still use the map manually."
     }
     fun locate() {
         if (!hasLocationPermission(context)) {
@@ -338,7 +338,7 @@ fun RecyclingMapScreen(p: EcoPalette, onBack: () -> Unit) {
             points = withContext(Dispatchers.IO) { loadPoints(context.applicationContext) }
                 .also { PointsCache.points = it }
         }
-        catch (e: Exception) { error = "Не удалось загрузить recycling_points.json: ${e.message}" }
+        catch (e: Exception) { error = "Could not load recycling_points.json: ${e.message}" }
         finally { loading = false }
     }
     val visiblePoints = remember(points, selectedFilter) { points.filter { it.matches(selectedFilter) } }
@@ -412,12 +412,12 @@ fun RecyclingMapScreen(p: EcoPalette, onBack: () -> Unit) {
             Row(Modifier.fillMaxWidth().background(p.panel).padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.Rounded.Close, contentDescription = "Назад", tint = p.text)
+                    Icon(Icons.Rounded.Close, contentDescription = "Back", tint = p.text)
                 }
                 Column(Modifier.weight(1f)) {
-                    Text("Карта сортировки", color = p.text, style = MaterialTheme.typography.titleMedium)
+                    Text("Recycling map", color = p.text, style = MaterialTheme.typography.titleMedium)
                     Text(
-                        if (loading) "Загружаем пункты…" else "${visiblePoints.size} пунктов · Латвия",
+                        if (loading) "Loading points…" else "${visiblePoints.size} points · Latvia",
                         color = p.muted, fontSize = 12.sp
                     )
                 }
@@ -426,7 +426,7 @@ fun RecyclingMapScreen(p: EcoPalette, onBack: () -> Unit) {
                     Spacer(Modifier.width(8.dp))
                 }
                 IconButton(onClick = { locate() }) {
-                    Icon(Icons.Rounded.MyLocation, contentDescription = "Моё местоположение", tint = p.accent)
+                    Icon(Icons.Rounded.MyLocation, contentDescription = "My location", tint = p.accent)
                 }
             }
             Row(Modifier.fillMaxWidth().background(p.panel).horizontalScroll(rememberScrollState())
@@ -457,34 +457,34 @@ fun RecyclingMapScreen(p: EcoPalette, onBack: () -> Unit) {
                         Text(point.store ?: point.kind.title, style = MaterialTheme.typography.titleMedium, color = p.text)
                         if (point.store != null) Text(point.kind.title, color = p.muted, fontSize = 12.sp)
                     }
-                    IconButton(onClick = { selected = null }) { Icon(Icons.Rounded.Close, "Закрыть", tint = p.text) }
+                    IconButton(onClick = { selected = null }) { Icon(Icons.Rounded.Close, "Close", tint = p.text) }
                 }
                 Text(point.address, color = p.text)
                 distanceText(point, userLocation)?.let { Text(it, color = p.accent, fontWeight = FontWeight.SemiBold) }
 
                 when (point.kind) {
                     PointKind.Deposit -> {
-                        Text("Принимает: бутылки и банки с депозитной маркировкой «D» — пластик, стекло, металл",
+                        Text("Accepts: bottles and cans with the deposit \"D\" mark — plastic, glass, metal",
                             color = p.text, fontSize = 13.sp)
                         point.note?.let { Text(it, color = p.muted, fontSize = 13.sp) }
                     }
                     else -> {
                         val main = MAIN_MATERIALS.filterKeys { it in point.materials }.values
-                        if (main.isNotEmpty()) Text("Принимает: " + main.joinToString(), color = p.text, fontSize = 13.sp)
+                        if (main.isNotEmpty()) Text("Accepts: " + main.joinToString(), color = p.text, fontSize = 13.sp)
                         if (point.extras.isNotEmpty())
-                            Text("Другое: " + point.extras.joinToString(), color = p.text, fontSize = 13.sp)
-                        if (point.operator.isNotBlank()) Text("Оператор: ${point.operator}", color = p.muted, fontSize = 12.sp)
-                        point.note?.let { Text("Примечание (LV): $it", color = p.muted, fontSize = 12.sp) }
+                            Text("Other: " + point.extras.joinToString(), color = p.text, fontSize = 13.sp)
+                        if (point.operator.isNotBlank()) Text("Operator: ${point.operator}", color = p.muted, fontSize = 12.sp)
+                        point.note?.let { Text("Note: $it", color = p.muted, fontSize = 12.sp) }
                     }
                 }
                 if (point.hours.isNotEmpty()) {
-                    Text("Часы работы", color = p.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Opening hours", color = p.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     point.hours.forEach { (days, hours) -> Text("$days: $hours", color = p.muted, fontSize = 12.sp) }
                 }
                 Button(onClick = { openRoute(context, point) }, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Rounded.Navigation, null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Построить маршрут")
+                    Text("Get directions")
                 }
             }
         } else if (points.isNotEmpty()) {
@@ -492,9 +492,9 @@ fun RecyclingMapScreen(p: EcoPalette, onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Surface(shape = RoundedCornerShape(16.dp), color = p.panel) {
                     Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        LegendDot(kindColor(PointKind.Containers), "Контейнеры", p)
-                        LegendDot(kindColor(PointKind.Deposit), "Тара", p)
-                        LegendDot(kindColor(PointKind.Site), "Площадки", p)
+                        LegendDot(kindColor(PointKind.Containers), "Containers", p)
+                        LegendDot(kindColor(PointKind.Deposit), "Deposit", p)
+                        LegendDot(kindColor(PointKind.Site), "Sites", p)
                     }
                 }
                 val location = userLocation
@@ -505,11 +505,11 @@ fun RecyclingMapScreen(p: EcoPalette, onBack: () -> Unit) {
                         selected = closest
                         map?.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(closest.lat, closest.lon), 15.0))
                     }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Ближайший пункт · ${distanceText(closest, location)}")
+                        Text("Nearest point · ${distanceText(closest, location)}")
                     }
                 } else if (location == null) {
                     Surface(shape = RoundedCornerShape(16.dp), color = p.panel) {
-                        Text("Нажми на точку или значок геолокации", modifier = Modifier.padding(12.dp), color = p.text)
+                        Text("Tap a point or the location icon", modifier = Modifier.padding(12.dp), color = p.text)
                     }
                 }
             }
