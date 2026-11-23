@@ -72,6 +72,19 @@ class EcoPreferences(context: Context) {
     var animations: Boolean
         get() = prefs.getBoolean("animations", true)
         set(value) = prefs.edit().putBoolean("animations", value).apply()
+    /** Пользователь согласился отправлять зафиксированные кадры на проверку. */
+    var shareFrames: Boolean
+        get() = prefs.getBoolean("share_frames", false)
+        set(value) = prefs.edit().putBoolean("share_frames", value).apply()
+    /** Окно согласия уже показывали (чтобы не спрашивать каждый раз). */
+    var shareConsentAsked: Boolean
+        get() = prefs.getBoolean("share_consent_asked", false)
+        set(value) = prefs.edit().putBoolean("share_consent_asked", value).apply()
+    /** Случайный id установки — по нему пользователь может удалить свои кадры. */
+    val deviceId: String
+        get() = prefs.getString("device_id", null) ?: java.util.UUID.randomUUID().toString().also {
+            prefs.edit().putString("device_id", it).apply()
+        }
 }
 
 @Composable

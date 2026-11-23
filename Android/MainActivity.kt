@@ -49,6 +49,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 
 private enum class Screen { Menu, Camera, Settings, About, Developer, Map  }
 
@@ -156,6 +159,49 @@ fun WasteCameraScreen(
     val low = settings.low
     val high = settings.high
 
+    // ── Отправка кадров на проверку (только с согласия пользователя) ──
+    val scope = rememberCoroutineScope()
+    var shareFrames by remember { mutableStateOf(prefs.shareFrames) }
+    var showConsent by remember { mutableStateOf(!prefs.shareConsentAsked) }
+    var showDispute by remember { mutableStateOf(false) }
+    var pendingDisputeLabel by remember { mutableStateOf<String?>(null) }
+    var capturedPrediction by remember { mutableStateOf<Prediction?>(null) }
+    var submission by remember { mutableStateOf<Deferred<Long?>?>(null) }
+    var feedbackStatus by remember { mutableStateOf<String?>(null) }
+    // Номер текущего зафиксированного кадра: ответы по старому кадру не должны менять экран нового.
+    var captureGen by remember { mutableIntStateOf(0) }
+
+    fun startUpload(frame: Bitmap, result: Prediction) {
+        val gen = captureGen
+        val job = scope.async { FeedbackUploader.submit(context, frame, result, prefs.deviceId) }
+        submission = job
+        feedbackStatus = "Sending frame for review…"
+        scope.launch {
+            val id = job.await()
+            if (gen == captureGen) feedbackStatus =
+                if (id != null) "Frame sent for review" else "Could not send the frame"
+        }
+    }
+
+    fun sendCorrection(userLabel: String) {
+        val frame = frozenBitmap ?: return
+        val result = capturedPrediction ?: return
+        val gen = captureGen
+        val job = submission
+        feedbackStatus = "Sending your correction…"
+        scope.launch {
+            val existingId = job?.await()
+            val ok = if (existingId != null) FeedbackUploader.dispute(existingId, prefs.deviceId, userLabel)
+            else {
+                val id = FeedbackUploader.submit(context, frame, result, prefs.deviceId, userLabel)
+                if (gen == captureGen && id != null) submission = scope.async { id }
+                id != null
+            }
+            if (gen == captureGen) feedbackStatus =
+                if (ok) "Thanks! Your correction was sent for review" else "Could not send. Check your connection"
+        }
+    }
+
     DisposableEffect(Unit) {
         onDispose {
             cameraActive.set(false)
@@ -196,6 +242,8 @@ fun WasteCameraScreen(
                     candidate = result.label
                     candidateCount = 3
                     errorMessage = null
+                    capturedPrediction = result
+                    if (shareFrames) startUpload(frame, result)
                 }
             },
             onError = { if (cameraActive.get()) { errorMessage = it; freezePending = false } })
@@ -251,6 +299,11 @@ fun WasteCameraScreen(
                 onClick = {
                     if (captureState.get() == 2) {
                         captureState.set(0)
+                        captureGen++
+                        capturedPrediction = null
+                        submission = null
+                        feedbackStatus = null
+                        showDispute = false
                         frozenBitmap = null
                         prediction = null
                         accepted = null
@@ -302,10 +355,73 @@ fun WasteCameraScreen(
                     Text("Raw score: " + (displayed?.let { String.format(Locale.US, "%.6f", confidence) } ?: "—"),
                         color = p.muted, fontSize = 12.sp)
             }
-            Spacer(Modifier.height(10.dp))
-            Text("On-device analysis · Frame kept in memory only", color = p.muted, fontSize = 11.sp)
+            if (frozenBitmap != null && capturedPrediction != null) {
+                Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(feedbackStatus ?: "", color = p.muted, fontSize = 12.sp, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { showDispute = true }) { Text("Wrong result?") }
+                }
+            } else Spacer(Modifier.height(10.dp))
+            Text(if (shareFrames) "On-device analysis · Captured frames are shared for review"
+                else "On-device analysis · Frame kept in memory only", color = p.muted, fontSize = 11.sp)
         }
     }
+
+    if (showConsent) ShareConsentDialog(
+        onAllow = {
+            prefs.shareFrames = true; prefs.shareConsentAsked = true
+            shareFrames = true; showConsent = false
+            pendingDisputeLabel?.let { sendCorrection(it) }
+            pendingDisputeLabel = null
+        },
+        onDeny = {
+            prefs.shareFrames = false; prefs.shareConsentAsked = true
+            shareFrames = false; showConsent = false
+            if (pendingDisputeLabel != null) feedbackStatus = "Not sent: frame sharing is off"
+            pendingDisputeLabel = null
+        }
+    )
+
+    if (showDispute) capturedPrediction?.let { result ->
+        AlertDialog(
+            onDismissRequest = { showDispute = false },
+            title = { Text("What is it actually?") },
+            text = {
+                Column {
+                    Text("Model said: ${labelTitle(result.label)}. Choose the correct category:",
+                        color = p.muted, fontSize = 13.sp)
+                    Spacer(Modifier.height(8.dp))
+                    LABEL_TITLES.keys.filter { it != result.label }.forEach { label ->
+                        TextButton(onClick = {
+                            showDispute = false
+                            if (shareFrames) sendCorrection(label)
+                            else { pendingDisputeLabel = label; showConsent = true }
+                        }, modifier = Modifier.fillMaxWidth()) { Text(labelTitle(label)) }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { showDispute = false }) { Text("Cancel") } }
+        )
+    }
+}
+
+/** Согласие на отправку кадров. Тексты интерфейса — только на английском. */
+@Composable
+fun ShareConsentDialog(onAllow: () -> Unit, onDeny: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = {}, // явный выбор обязателен
+        title = { Text("Help improve EcoVision") },
+        text = {
+            Text("When you capture a frame, it can be sent to the EcoVision team together with the model's " +
+                "answer and any correction you make. We check whether recognition was right and use the " +
+                "frames to improve the model.\n\nFrames are linked only to a random ID of this install, not " +
+                "to your name. Please avoid capturing people or personal information. You can turn this off " +
+                "and delete your shared frames at any time in Settings.")
+        },
+        confirmButton = { TextButton(onClick = onAllow) { Text("Allow") } },
+        dismissButton = { TextButton(onClick = onDeny) { Text("No thanks") } }
+    )
 }
 
 /** ~8 кадров/с для живого распознавания. */

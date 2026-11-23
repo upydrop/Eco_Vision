@@ -1,6 +1,15 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+}
+
+// Адрес и ключ review-API берутся из local.properties (он не попадает в git):
+//   review.apiUrl=https://waste-review-api.<subdomain>.workers.dev
+//   review.appKey=<тот же APP_KEY, что в wrangler secret>
+val localProps = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
 }
 
 android {
@@ -17,6 +26,9 @@ android {
         versionName = "1.2.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField("String", "REVIEW_API_URL", "\"${localProps.getProperty("review.apiUrl", "")}\"")
+        buildConfigField("String", "REVIEW_APP_KEY", "\"${localProps.getProperty("review.appKey", "")}\"")
     }
 
     buildTypes {
@@ -33,6 +45,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 
 @Composable
 fun EcoPageHeader(title: String, p: EcoPalette, onBack: () -> Unit) {
@@ -58,6 +59,11 @@ fun SettingsScreen(
     var stabilize by remember { mutableStateOf(prefs.stabilize) }
     var animations by remember { mutableStateOf(prefs.animations) }
     var unlocked by remember { mutableStateOf(prefs.developerUnlocked) }
+    var shareFrames by remember { mutableStateOf(prefs.shareFrames) }
+    var showConsent by remember { mutableStateOf(false) }
+    var deleteStatus by remember { mutableStateOf<String?>(null) }
+    var deleting by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     Column(Modifier.fillMaxSize().background(p.background).statusBarsPadding()
         .verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -79,7 +85,36 @@ fun SettingsScreen(
             EcoSwitchRow("Stable result", "Reduces jumping between categories", stabilize, p) {
                 stabilize = it; prefs.stabilize = it
             }
-            Text("Predictions run entirely on the device. Frames are not saved.", color = p.muted, fontSize = 12.sp)
+            Text(if (shareFrames) "Predictions run on the device. Captured frames are shared for review."
+                else "Predictions run entirely on the device. Frames are not saved.", color = p.muted, fontSize = 12.sp)
+        }
+        EcoSection("Help improve EcoVision", p) {
+            EcoSwitchRow("Share captured frames",
+                "Send captured frames and your corrections to the team to check and improve the model",
+                shareFrames, p) {
+                if (it) showConsent = true
+                else { shareFrames = false; prefs.shareFrames = false; prefs.shareConsentAsked = true }
+            }
+            HorizontalDivider(color = p.soft)
+            Row(Modifier.fillMaxWidth().clickable(enabled = !deleting) {
+                deleting = true
+                deleteStatus = "Deleting…"
+                scope.launch {
+                    val n = FeedbackUploader.deleteAll(prefs.deviceId)
+                    deleteStatus = when (n) {
+                        null -> "Could not delete. Check your connection and try again"
+                        0 -> "No shared frames found"
+                        else -> "Deleted $n shared frame(s)"
+                    }
+                    deleting = false
+                }
+            }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Delete my shared frames", color = p.text, fontWeight = FontWeight.SemiBold)
+                    Text(deleteStatus ?: "Removes every frame sent from this device", color = p.muted, fontSize = 12.sp)
+                }
+                Icon(Icons.Rounded.ChevronRight, null, tint = p.text)
+            }
         }
         if (unlocked) {
             EcoSection("Advanced", p) {
@@ -94,6 +129,10 @@ fun SettingsScreen(
         }
         Spacer(Modifier.height(12.dp))
     }
+    if (showConsent) ShareConsentDialog(
+        onAllow = { shareFrames = true; prefs.shareFrames = true; prefs.shareConsentAsked = true; showConsent = false },
+        onDeny = { shareFrames = false; prefs.shareFrames = false; prefs.shareConsentAsked = true; showConsent = false }
+    )
 }
 
 @Composable
@@ -144,7 +183,8 @@ fun AboutScreen(p: EcoPalette, prefs: EcoPreferences, onBack: () -> Unit, onUnlo
             Text("EcoVision", color = p.accent, fontSize = 35.sp, fontWeight = FontWeight.Black)
             Text("SORT SMARTER", color = p.muted, letterSpacing = 3.sp)
             Text("Material recognition with a neural network, right on your device.", color = p.text)
-            Text("The camera analyzes frames without saving photos.", color = p.muted, fontSize = 13.sp)
+            Text(if (prefs.shareFrames) "Captured frames are shared with the team for review (you can turn this off in Settings)."
+                else "The camera analyzes frames without saving photos.", color = p.muted, fontSize = 13.sp)
             Text("Created by 'MusorDrop':\nLead engineers: Valery Semyannikov, Alexander Babarik\nCollaborator: ChatGPT", color = p.muted, fontSize = 13.sp)
             Text("Version 1.2.1", color = p.text, modifier = Modifier.clickable {
                 if (!prefs.developerUnlocked) {

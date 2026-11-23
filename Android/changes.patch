@@ -1,0 +1,450 @@
+diff --git a/Android/EcoTheme.kt b/Android/EcoTheme.kt
+index 76468a9..3843c93 100644
+--- a/Android/EcoTheme.kt
++++ b/Android/EcoTheme.kt
+@@ -72,6 +72,19 @@ class EcoPreferences(context: Context) {
+     var animations: Boolean
+         get() = prefs.getBoolean("animations", true)
+         set(value) = prefs.edit().putBoolean("animations", value).apply()
++    /** Пользователь согласился отправлять зафиксированные кадры на проверку. */
++    var shareFrames: Boolean
++        get() = prefs.getBoolean("share_frames", false)
++        set(value) = prefs.edit().putBoolean("share_frames", value).apply()
++    /** Окно согласия уже показывали (чтобы не спрашивать каждый раз). */
++    var shareConsentAsked: Boolean
++        get() = prefs.getBoolean("share_consent_asked", false)
++        set(value) = prefs.edit().putBoolean("share_consent_asked", value).apply()
++    /** Случайный id установки — по нему пользователь может удалить свои кадры. */
++    val deviceId: String
++        get() = prefs.getString("device_id", null) ?: java.util.UUID.randomUUID().toString().also {
++            prefs.edit().putString("device_id", it).apply()
++        }
+ }
+ 
+ @Composable
+diff --git a/Android/FeedbackUploader.kt b/Android/FeedbackUploader.kt
+new file mode 100644
+index 0000000..5f19e58
+--- /dev/null
++++ b/Android/FeedbackUploader.kt
+@@ -0,0 +1,134 @@
++package com.example.ecovision
++
++import android.content.Context
++import android.graphics.Bitmap
++import android.util.Log
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.withContext
++import org.json.JSONObject
++import java.io.ByteArrayOutputStream
++import java.io.DataOutputStream
++import java.net.HttpURLConnection
++import java.net.URL
++import java.util.UUID
++
++/**
++ * Sends captured frames to the review backend (Cloudflare Worker → Telegram).
++ * Used only when the user has opted in (EcoPreferences.shareFrames).
++ */
++object FeedbackUploader {
++    // Берутся из local.properties (review.apiUrl / review.appKey), см. build.gradle.kts.
++    // Ключ из APK можно достать — это защита от случайного мусора, а не настоящая авторизация.
++    private val BASE_URL = BuildConfig.REVIEW_API_URL.trimEnd('/')
++    private val APP_KEY = BuildConfig.REVIEW_APP_KEY
++
++    /** false, если адрес не прописан в local.properties — тогда ничего не отправляем. */
++    val isConfigured: Boolean get() = BASE_URL.isNotEmpty() && APP_KEY.isNotEmpty()
++
++    private const val TAG = "FeedbackUploader"
++    private const val MAX_SIDE = 1024
++    private const val JPEG_QUALITY = 85
++    private const val TIMEOUT_MS = 15_000
++
++    /** @return id записи на сервере или null при ошибке. */
++    suspend fun submit(
++        context: Context,
++        frame: Bitmap,
++        prediction: Prediction,
++        deviceId: String,
++        userLabel: String? = null
++    ): Long? = withContext(Dispatchers.IO) {
++        runCatching {
++            val jpeg = encodeJpeg(frame)
++            val boundary = "----EcoVision" + UUID.randomUUID().toString().replace("-", "")
++            val conn = open("/v1/submissions").apply {
++                setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
++            }
++            DataOutputStream(conn.outputStream).use { out ->
++                fun field(name: String, value: String) {
++                    out.writeBytes("--$boundary\r\n")
++                    out.writeBytes("Content-Disposition: form-data; name=\"$name\"\r\n\r\n")
++                    out.write(value.toByteArray(Charsets.UTF_8))
++                    out.writeBytes("\r\n")
++                }
++                field("device_id", deviceId)
++                field("predicted_label", prediction.label)
++                field("confidence", prediction.confidence.toString())
++                field("app_version", appVersion(context))
++                if (userLabel != null) field("user_label", userLabel)
++                out.writeBytes("--$boundary\r\n")
++                out.writeBytes("Content-Disposition: form-data; name=\"image\"; filename=\"frame.jpg\"\r\n")
++                out.writeBytes("Content-Type: image/jpeg\r\n\r\n")
++                out.write(jpeg)
++                out.writeBytes("\r\n--$boundary--\r\n")
++            }
++            val (code, body) = read(conn)
++            if (code != 201) error("HTTP $code: $body")
++            JSONObject(body).getLong("id")
++        }.onFailure { Log.w(TAG, "submit failed", it) }.getOrNull()
++    }
++
++    /** Пользователь не согласен с моделью и выбрал другой класс. */
++    suspend fun dispute(id: Long, deviceId: String, userLabel: String): Boolean = withContext(Dispatchers.IO) {
++        runCatching {
++            val body = JSONObject().put("device_id", deviceId).put("user_label", userLabel)
++            val (code, text) = postJson("/v1/submissions/$id/dispute", body)
++            if (code != 200) error("HTTP $code: $text")
++            true
++        }.onFailure { Log.w(TAG, "dispute failed", it) }.getOrDefault(false)
++    }
++
++    /** Удаляет все кадры этого устройства на сервере. @return сколько удалено или null при ошибке. */
++    suspend fun deleteAll(deviceId: String): Int? = withContext(Dispatchers.IO) {
++        runCatching {
++            val (code, text) = postJson("/v1/delete", JSONObject().put("device_id", deviceId))
++            if (code != 200) error("HTTP $code: $text")
++            JSONObject(text).getInt("deleted")
++        }.onFailure { Log.w(TAG, "delete failed", it) }.getOrNull()
++    }
++
++    private fun postJson(path: String, body: JSONObject): Pair<Int, String> {
++        val conn = open(path).apply { setRequestProperty("Content-Type", "application/json") }
++        conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
++        return read(conn)
++    }
++
++    private fun open(path: String): HttpURLConnection {
++        check(isConfigured) { "Review API is not configured (local.properties)" }
++        return (URL(BASE_URL + path).openConnection() as HttpURLConnection).apply {
++            requestMethod = "POST"
++            doOutput = true
++            connectTimeout = TIMEOUT_MS
++            readTimeout = TIMEOUT_MS
++            setRequestProperty("X-App-Key", APP_KEY)
++        }
++    }
++
++    private fun read(conn: HttpURLConnection): Pair<Int, String> = try {
++        val code = conn.responseCode
++        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
++        code to (stream?.bufferedReader()?.use { it.readText() } ?: "")
++    } finally {
++        conn.disconnect()
++    }
++
++    /** Уменьшает кадр до 1024 px по длинной стороне: модели всё равно нужно 224×224. */
++    private fun encodeJpeg(frame: Bitmap): ByteArray {
++        val scale = MAX_SIDE.toFloat() / maxOf(frame.width, frame.height)
++        val scaled = if (scale < 1f)
++            Bitmap.createScaledBitmap(frame, (frame.width * scale).toInt(), (frame.height * scale).toInt(), true)
++        else frame
++        return try {
++            ByteArrayOutputStream().use { out ->
++                scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
++                out.toByteArray()
++            }
++        } finally {
++            if (scaled !== frame) scaled.recycle()
++        }
++    }
++
++    private fun appVersion(context: Context): String =
++        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }
++            .getOrNull() ?: "?"
++}
+diff --git a/Android/MainActivity.kt b/Android/MainActivity.kt
+index 1023b88..541b98f 100644
+--- a/Android/MainActivity.kt
++++ b/Android/MainActivity.kt
+@@ -49,6 +49,9 @@ import java.util.concurrent.atomic.AtomicBoolean
+ import java.util.concurrent.atomic.AtomicInteger
+ import java.util.concurrent.ExecutorService
+ import java.util.concurrent.Executors
++import kotlinx.coroutines.Deferred
++import kotlinx.coroutines.async
++import kotlinx.coroutines.launch
+ 
+ private enum class Screen { Menu, Camera, Settings, About, Developer, Map  }
+ 
+@@ -156,6 +159,49 @@ fun WasteCameraScreen(
+     val low = settings.low
+     val high = settings.high
+ 
++    // ── Отправка кадров на проверку (только с согласия пользователя) ──
++    val scope = rememberCoroutineScope()
++    var shareFrames by remember { mutableStateOf(prefs.shareFrames) }
++    var showConsent by remember { mutableStateOf(!prefs.shareConsentAsked) }
++    var showDispute by remember { mutableStateOf(false) }
++    var pendingDisputeLabel by remember { mutableStateOf<String?>(null) }
++    var capturedPrediction by remember { mutableStateOf<Prediction?>(null) }
++    var submission by remember { mutableStateOf<Deferred<Long?>?>(null) }
++    var feedbackStatus by remember { mutableStateOf<String?>(null) }
++    // Номер текущего зафиксированного кадра: ответы по старому кадру не должны менять экран нового.
++    var captureGen by remember { mutableIntStateOf(0) }
++
++    fun startUpload(frame: Bitmap, result: Prediction) {
++        val gen = captureGen
++        val job = scope.async { FeedbackUploader.submit(context, frame, result, prefs.deviceId) }
++        submission = job
++        feedbackStatus = "Sending frame for review…"
++        scope.launch {
++            val id = job.await()
++            if (gen == captureGen) feedbackStatus =
++                if (id != null) "Frame sent for review" else "Could not send the frame"
++        }
++    }
++
++    fun sendCorrection(userLabel: String) {
++        val frame = frozenBitmap ?: return
++        val result = capturedPrediction ?: return
++        val gen = captureGen
++        val job = submission
++        feedbackStatus = "Sending your correction…"
++        scope.launch {
++            val existingId = job?.await()
++            val ok = if (existingId != null) FeedbackUploader.dispute(existingId, prefs.deviceId, userLabel)
++            else {
++                val id = FeedbackUploader.submit(context, frame, result, prefs.deviceId, userLabel)
++                if (gen == captureGen && id != null) submission = scope.async { id }
++                id != null
++            }
++            if (gen == captureGen) feedbackStatus =
++                if (ok) "Thanks! Your correction was sent for review" else "Could not send. Check your connection"
++        }
++    }
++
+     DisposableEffect(Unit) {
+         onDispose {
+             cameraActive.set(false)
+@@ -196,6 +242,8 @@ fun WasteCameraScreen(
+                     candidate = result.label
+                     candidateCount = 3
+                     errorMessage = null
++                    capturedPrediction = result
++                    if (shareFrames) startUpload(frame, result)
+                 }
+             },
+             onError = { if (cameraActive.get()) { errorMessage = it; freezePending = false } })
+@@ -251,6 +299,11 @@ fun WasteCameraScreen(
+                 onClick = {
+                     if (captureState.get() == 2) {
+                         captureState.set(0)
++                        captureGen++
++                        capturedPrediction = null
++                        submission = null
++                        feedbackStatus = null
++                        showDispute = false
+                         frozenBitmap = null
+                         prediction = null
+                         accepted = null
+@@ -302,12 +355,75 @@ fun WasteCameraScreen(
+                     Text("Raw score: " + (displayed?.let { String.format(Locale.US, "%.6f", confidence) } ?: "—"),
+                         color = p.muted, fontSize = 12.sp)
+             }
+-            Spacer(Modifier.height(10.dp))
+-            Text("On-device analysis · Frame kept in memory only", color = p.muted, fontSize = 11.sp)
++            if (frozenBitmap != null && capturedPrediction != null) {
++                Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
++                    Text(feedbackStatus ?: "", color = p.muted, fontSize = 12.sp, maxLines = 1,
++                        overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
++                    TextButton(onClick = { showDispute = true }) { Text("Wrong result?") }
++                }
++            } else Spacer(Modifier.height(10.dp))
++            Text(if (shareFrames) "On-device analysis · Captured frames are shared for review"
++                else "On-device analysis · Frame kept in memory only", color = p.muted, fontSize = 11.sp)
++        }
++    }
++
++    if (showConsent) ShareConsentDialog(
++        onAllow = {
++            prefs.shareFrames = true; prefs.shareConsentAsked = true
++            shareFrames = true; showConsent = false
++            pendingDisputeLabel?.let { sendCorrection(it) }
++            pendingDisputeLabel = null
++        },
++        onDeny = {
++            prefs.shareFrames = false; prefs.shareConsentAsked = true
++            shareFrames = false; showConsent = false
++            if (pendingDisputeLabel != null) feedbackStatus = "Not sent: frame sharing is off"
++            pendingDisputeLabel = null
+         }
++    )
++
++    if (showDispute) capturedPrediction?.let { result ->
++        AlertDialog(
++            onDismissRequest = { showDispute = false },
++            title = { Text("What is it actually?") },
++            text = {
++                Column {
++                    Text("Model said: ${labelTitle(result.label)}. Choose the correct category:",
++                        color = p.muted, fontSize = 13.sp)
++                    Spacer(Modifier.height(8.dp))
++                    LABEL_TITLES.keys.filter { it != result.label }.forEach { label ->
++                        TextButton(onClick = {
++                            showDispute = false
++                            if (shareFrames) sendCorrection(label)
++                            else { pendingDisputeLabel = label; showConsent = true }
++                        }, modifier = Modifier.fillMaxWidth()) { Text(labelTitle(label)) }
++                    }
++                }
++            },
++            confirmButton = {},
++            dismissButton = { TextButton(onClick = { showDispute = false }) { Text("Cancel") } }
++        )
+     }
+ }
+ 
++/** Согласие на отправку кадров. Тексты интерфейса — только на английском. */
++@Composable
++fun ShareConsentDialog(onAllow: () -> Unit, onDeny: () -> Unit) {
++    AlertDialog(
++        onDismissRequest = {}, // явный выбор обязателен
++        title = { Text("Help improve EcoVision") },
++        text = {
++            Text("When you capture a frame, it can be sent to the EcoVision team together with the model's " +
++                "answer and any correction you make. We check whether recognition was right and use the " +
++                "frames to improve the model.\n\nFrames are linked only to a random ID of this install, not " +
++                "to your name. Please avoid capturing people or personal information. You can turn this off " +
++                "and delete your shared frames at any time in Settings.")
++        },
++        confirmButton = { TextButton(onClick = onAllow) { Text("Allow") } },
++        dismissButton = { TextButton(onClick = onDeny) { Text("No thanks") } }
++    )
++}
++
+ /** ~8 кадров/с для живого распознавания. */
+ private const val MIN_INFERENCE_INTERVAL_MS = 125L
+ 
+diff --git a/Android/SettingsScreen.kt b/Android/SettingsScreen.kt
+index 80285b7..96bd8db 100644
+--- a/Android/SettingsScreen.kt
++++ b/Android/SettingsScreen.kt
+@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
++import kotlinx.coroutines.launch
+ 
+ @Composable
+ fun EcoPageHeader(title: String, p: EcoPalette, onBack: () -> Unit) {
+@@ -58,6 +59,11 @@ fun SettingsScreen(
+     var stabilize by remember { mutableStateOf(prefs.stabilize) }
+     var animations by remember { mutableStateOf(prefs.animations) }
+     var unlocked by remember { mutableStateOf(prefs.developerUnlocked) }
++    var shareFrames by remember { mutableStateOf(prefs.shareFrames) }
++    var showConsent by remember { mutableStateOf(false) }
++    var deleteStatus by remember { mutableStateOf<String?>(null) }
++    var deleting by remember { mutableStateOf(false) }
++    val scope = rememberCoroutineScope()
+     Column(Modifier.fillMaxSize().background(p.background).statusBarsPadding()
+         .verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp),
+         verticalArrangement = Arrangement.spacedBy(24.dp)) {
+@@ -79,7 +85,36 @@ fun SettingsScreen(
+             EcoSwitchRow("Stable result", "Reduces jumping between categories", stabilize, p) {
+                 stabilize = it; prefs.stabilize = it
+             }
+-            Text("Predictions run entirely on the device. Frames are not saved.", color = p.muted, fontSize = 12.sp)
++            Text(if (shareFrames) "Predictions run on the device. Captured frames are shared for review."
++                else "Predictions run entirely on the device. Frames are not saved.", color = p.muted, fontSize = 12.sp)
++        }
++        EcoSection("Help improve EcoVision", p) {
++            EcoSwitchRow("Share captured frames",
++                "Send captured frames and your corrections to the team to check and improve the model",
++                shareFrames, p) {
++                if (it) showConsent = true
++                else { shareFrames = false; prefs.shareFrames = false; prefs.shareConsentAsked = true }
++            }
++            HorizontalDivider(color = p.soft)
++            Row(Modifier.fillMaxWidth().clickable(enabled = !deleting) {
++                deleting = true
++                deleteStatus = "Deleting…"
++                scope.launch {
++                    val n = FeedbackUploader.deleteAll(prefs.deviceId)
++                    deleteStatus = when (n) {
++                        null -> "Could not delete. Check your connection and try again"
++                        0 -> "No shared frames found"
++                        else -> "Deleted $n shared frame(s)"
++                    }
++                    deleting = false
++                }
++            }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
++                Column(Modifier.weight(1f)) {
++                    Text("Delete my shared frames", color = p.text, fontWeight = FontWeight.SemiBold)
++                    Text(deleteStatus ?: "Removes every frame sent from this device", color = p.muted, fontSize = 12.sp)
++                }
++                Icon(Icons.Rounded.ChevronRight, null, tint = p.text)
++            }
+         }
+         if (unlocked) {
+             EcoSection("Advanced", p) {
+@@ -94,6 +129,10 @@ fun SettingsScreen(
+         }
+         Spacer(Modifier.height(12.dp))
+     }
++    if (showConsent) ShareConsentDialog(
++        onAllow = { shareFrames = true; prefs.shareFrames = true; prefs.shareConsentAsked = true; showConsent = false },
++        onDeny = { shareFrames = false; prefs.shareFrames = false; prefs.shareConsentAsked = true; showConsent = false }
++    )
+ }
+ 
+ @Composable
+@@ -144,7 +183,8 @@ fun AboutScreen(p: EcoPalette, prefs: EcoPreferences, onBack: () -> Unit, onUnlo
+             Text("EcoVision", color = p.accent, fontSize = 35.sp, fontWeight = FontWeight.Black)
+             Text("SORT SMARTER", color = p.muted, letterSpacing = 3.sp)
+             Text("Material recognition with a neural network, right on your device.", color = p.text)
+-            Text("The camera analyzes frames without saving photos.", color = p.muted, fontSize = 13.sp)
++            Text(if (prefs.shareFrames) "Captured frames are shared with the team for review (you can turn this off in Settings)."
++                else "The camera analyzes frames without saving photos.", color = p.muted, fontSize = 13.sp)
+             Text("Created by 'MusorDrop':\nLead engineers: Valery Semyannikov, Alexander Babarik\nCollaborator: ChatGPT", color = p.muted, fontSize = 13.sp)
+             Text("Version 1.2.1", color = p.text, modifier = Modifier.clickable {
+                 if (!prefs.developerUnlocked) {
+diff --git a/Android/build.gradle.kts b/Android/build.gradle.kts
+index e2b95c3..28c2c12 100644
+--- a/Android/build.gradle.kts
++++ b/Android/build.gradle.kts
+@@ -1,8 +1,17 @@
++import java.util.Properties
++
+ plugins {
+     alias(libs.plugins.android.application)
+     alias(libs.plugins.kotlin.compose)
+ }
+ 
++// Адрес и ключ review-API берутся из local.properties (он не попадает в git):
++//   review.apiUrl=https://waste-review-api.<subdomain>.workers.dev
++//   review.appKey=<тот же APP_KEY, что в wrangler secret>
++val localProps = Properties().apply {
++    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
++}
++
+ android {
+     namespace = "com.example.ecovision"
+     compileSdk {
+@@ -17,6 +26,9 @@ android {
+         versionName = "1.2.1"
+ 
+         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
++
++        buildConfigField("String", "REVIEW_API_URL", "\"${localProps.getProperty("review.apiUrl", "")}\"")
++        buildConfigField("String", "REVIEW_APP_KEY", "\"${localProps.getProperty("review.appKey", "")}\"")
+     }
+ 
+     buildTypes {
+@@ -33,6 +45,7 @@ android {
+     }
+     buildFeatures {
+         compose = true
++        buildConfig = true
+     }
+ }
+ 
