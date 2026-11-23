@@ -7,7 +7,7 @@ The repository contains:
 - **`PythonModel/`** — Python scripts for training, fine-tuning, evaluating, and exporting the image classifier.
 
 You can find the apk version of the app for your android here: 
-https://failiem.lv/u/6uusrwcapxwz2xee
+https://failiem.lv/u/fxt42gejy45z8tum
 
 ## Features
 
